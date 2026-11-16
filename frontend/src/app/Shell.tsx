@@ -13,6 +13,7 @@ import {
   Network,
   Phone,
   Settings,
+  Share2,
   Trash2,
   UserCog,
   X,
@@ -56,11 +57,14 @@ function TopBar({ admin, base }: { admin: boolean; base: string }) {
   const clan = config.data?.clan_name ?? graph?.clan ?? "Gia phả";
   const nav = [
     { to: base, label: "Cây gia phả", icon: Network, end: true },
+    { to: `${base}/mang-luoi`, label: "Mạng lưới", icon: Share2 },
     { to: `${base}/danh-sach`, label: "Danh sách", icon: List },
     { to: `${base}/ngay-gio`, label: "Ngày giỗ", icon: CalendarHeart },
     { to: `${base}/pha-ky`, label: "Phả ký", icon: BookOpen },
   ];
-  const goPerson = (id: number) => navigate(`${base}/p/${id}`);
+  // Đang xem mạng lưới thì tìm người là chuyển tâm, còn lại mở trên cây
+  const goPerson = (id: number) =>
+    navigate(location.pathname.startsWith(`${base}/mang-luoi`) ? `${base}/mang-luoi/${id}` : `${base}/p/${id}`);
   const logout = async () => {
     await post("/api/auth/logout").catch(() => {});
     qc.clear();
@@ -89,7 +93,7 @@ function TopBar({ admin, base }: { admin: boolean; base: string }) {
           ))}
         </nav>
         <div className="flex-1" />
-        <PersonSearch graph={graph} onPick={(p) => goPerson(p.id)} className="hidden w-56 md:block 2xl:w-72" compact placeholder="Tìm người trong cây…" />
+        <PersonSearch graph={graph} onPick={(p) => goPerson(p.id)} className="hidden w-56 md:block 2xl:w-72" compact placeholder="Tìm người…" />
         <div className="hidden sm:block">
           <MeChip graph={graph} meLabel={kin.meLabel} onFocusMe={() => kin.meId != null && goPerson(kin.meId)} />
         </div>
@@ -118,7 +122,7 @@ function TopBar({ admin, base }: { admin: boolean; base: string }) {
       </div>
       {mobileOpen && (
         <div className={clsx("absolute inset-x-0 top-full max-h-[80vh] overflow-y-auto border-b border-stone-200 bg-white p-3 shadow-xl", admin ? "xl:hidden" : "lg:hidden")}>
-          <PersonSearch graph={graph} onPick={(p) => goPerson(p.id)} className="mb-3 md:hidden" placeholder="Tìm người trong cây…" />
+          <PersonSearch graph={graph} onPick={(p) => goPerson(p.id)} className="mb-3 md:hidden" placeholder="Tìm người…" />
           <div className="mb-3 sm:hidden">
             <MeChip graph={graph} meLabel={kin.meLabel} onFocusMe={() => kin.meId != null && goPerson(kin.meId)} />
           </div>

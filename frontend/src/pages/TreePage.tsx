@@ -11,6 +11,7 @@ import {
   Plus,
   Printer,
   Route,
+  Share2,
   Tags,
   X,
 } from "lucide-react";
@@ -29,6 +30,7 @@ import { Button, Empty, IconButton, Spinner, Toggle } from "@/components/ui";
 import { useKinship } from "@/components/useKinship";
 import { WhoAmIBanner } from "@/components/WhoAmI";
 import { computeLayout, NODE_W, type LNode } from "@/lib/layout";
+import { computeNetworkLayout } from "@/lib/network";
 import { capitalize } from "@/lib/text";
 import { useUI } from "@/store/ui";
 import { buildSVG, downloadPNG, downloadSVG, printTree } from "@/tree/exportTree";
@@ -50,7 +52,14 @@ type Modal =
   | { kind: "compare"; id: number | null }
   | null;
 
-function Legend() {
+const RADIUS = [
+  { v: 1, label: "Gia đình gần (cha mẹ, anh chị em, vợ chồng, con)" },
+  { v: 2, label: "Mở rộng (ông bà, cô chú, cháu, nhà vợ/chồng)" },
+  { v: 3, label: "Rộng" },
+  { v: 4, label: "Rất rộng" },
+];
+
+function Legend({ network }: { network?: boolean }) {
   const Sw = ({ cls, label }: { cls: string; label: string }) => (
     <li className="flex items-center gap-2">
       <span className={clsx("inline-block h-5 w-8 rounded-md border-2", cls)} />
@@ -63,6 +72,7 @@ function Legend() {
       <Sw cls="border-pink-700 bg-pink-100" label="Nữ trong dòng họ" />
       <Sw cls="border-blue-300 bg-white" label="Dâu / rể (nền nhạt)" />
       <Sw cls="border-dashed border-blue-700 bg-blue-100" label="Dòng ngoại (viền nét đứt)" />
+      {network && <Sw cls="border-dotted border-blue-300 bg-white" label="Nhà thông gia (viền chấm)" />}
       <li className="flex items-center gap-2">
         <span className="relative inline-block h-5 w-8 overflow-hidden rounded-md border-2 border-stone-400 bg-white">
           <span className="absolute -right-2 -top-2 size-4 rotate-45 bg-stone-700" />
@@ -77,7 +87,11 @@ function Legend() {
   );
 }
 
-export default function TreePage() {
+/**
+ * Trang cây gia phả. Với `network`, cùng trang này hiển thị mạng lưới quan hệ lấy một người làm tâm
+ * (gồm cả nhà thông gia) — dùng chung menu, hồ sơ, thêm/sửa/xóa với cây dòng họ.
+ */
+export default function TreePage({ network = false }: { network?: boolean }) {
   const src = useSource();
   const admin = src.mode === "admin";
   const navigate = useNavigate();
@@ -102,12 +116,19 @@ export default function TreePage() {
   const [size, setSize] = useState({ w: 1024, h: 768 });
   const pendingFocus = useRef<number | null>(null);
   const didInitialFit = useRef(false);
+  const lastCenter = useRef<number | null>(null);
 
   const collapsed = useMemo(() => new Set(ui.collapsed), [ui.collapsed]);
-  const layout = useMemo(
-    () => (graph ? computeLayout(graph, { collapsed, hideNgoai: ui.hideNgoai, branch: ui.branch }) : null),
-    [graph, collapsed, ui.hideNgoai, ui.branch],
-  );
+  // Tâm của mạng lưới: người trên đường dẫn, rồi "tôi", rồi thủy tổ
+  const center = network && graph ? ([routeId, kin.meId, graph.rootId].find((id) => id != null && graph.get(id)) ?? null) : null;
+  const layout = useMemo(() => {
+    if (!graph) return null;
+    if (network) {
+      if (center == null) return null;
+      return computeNetworkLayout(graph, center, { radius: ui.netRadius, include: ui.highlight ?? undefined });
+    }
+    return computeLayout(graph, { collapsed, hideNgoai: ui.hideNgoai, branch: ui.branch });
+  }, [graph, network, center, ui.netRadius, ui.highlight, collapsed, ui.hideNgoai, ui.branch]);
 
   // Huy hiệu cách gọi trên mọi nút (FR-51), hoặc "người này gọi tôi là gì" (FR-53)
   const badges = useMemo(() => {
@@ -121,9 +142,12 @@ export default function TreePage() {
     return m;
   }, [kin.relations, ui.showBadges, ui.reverse]);
 
-  const selectedId = panel?.id ?? menu?.id ?? routeId;
+  const selectedId = panel?.id ?? menu?.id ?? (network ? center : routeId);
   const selectedRelation = selectedId != null ? kin.relations?.get(selectedId) ?? null : null;
-  const lineToRoot = useMemo(() => (graph && kin.meId != null ? new Set(graph.lineToRoot(kin.meId)) : null), [graph, kin.meId]);
+  const lineToRoot = useMemo(
+    () => (graph && kin.meId != null && !network ? new Set(graph.lineToRoot(kin.meId)) : null),
+    [graph, kin.meId, network],
+  );
   const path = useMemo(() => {
     if (ui.highlight) return new Set(ui.highlight);
     if (selectedRelation && selectedRelation.path.length > 1) return new Set(selectedRelation.path);
@@ -142,9 +166,20 @@ export default function TreePage() {
 
   // ---- định vị --------------------------------------------------------
   const focus = useCallback((id: number, flash = true) => canvasRef.current?.focus(id, flash) ?? false, []);
+  const netPath = (id: number) => `${src.base}/mang-luoi/${id}`;
   const ensureVisible = useCallback(
     (id: number) => {
       if (!graph) return;
+      if (network) {
+        if (!layout?.byPerson.has(id)) navigate(`${src.base}/mang-luoi/${id}`);
+        pendingFocus.current = id;
+        return;
+      }
+      // Nhà thông gia không có chỗ trên cây dòng họ → xem ở mạng lưới
+      if (graph.get(id)?.kind === "extended") {
+        navigate(`${src.base}/mang-luoi/${id}`);
+        return;
+      }
       // mở các nhánh đang thu gọn che người này
       const ancestors = graph.lineToRoot(id).slice(1);
       const blocking = ancestors.filter((a) => collapsed.has(a));
@@ -153,7 +188,7 @@ export default function TreePage() {
       if (ui.hideNgoai && graph.get(id)?.ngoai) ui.set({ hideNgoai: false });
       pendingFocus.current = id;
     },
-    [graph, collapsed, ui],
+    [graph, collapsed, ui, network, layout, navigate, src.base],
   );
 
   useEffect(() => {
@@ -170,6 +205,13 @@ export default function TreePage() {
       if (pendingFocus.current != null && layout.byPerson.has(pendingFocus.current)) {
         r.focus(pendingFocus.current, { flash: true });
         pendingFocus.current = null;
+        if (network) lastCenter.current = center;
+      } else if (network) {
+        if (center != null && lastCenter.current !== center) {
+          r.focus(center, { animate: didInitialFit.current, flash: didInitialFit.current });
+          lastCenter.current = center;
+          didInitialFit.current = true;
+        }
       } else if (!didInitialFit.current) {
         didInitialFit.current = true;
         if (routeId != null && layout.byPerson.has(routeId)) {
@@ -195,9 +237,14 @@ export default function TreePage() {
     return () => ro.disconnect();
   }, [container]);
 
+  // Link riêng của một người thuộc nhà thông gia → mở ở mạng lưới
+  useEffect(() => {
+    if (!network && routeId != null && graph?.get(routeId)?.kind === "extended") navigate(netPath(routeId), { replace: true });
+  }, [routeId, graph, network]); // eslint-disable-line react-hooks/exhaustive-deps
+
   // Mở link riêng của một thành viên (FR-11)
   useEffect(() => {
-    if (routeId == null || !graph || !graph.get(routeId) || !didInitialFit.current) return;
+    if (network || routeId == null || !graph || !graph.get(routeId) || !didInitialFit.current) return;
     if (panel?.id !== routeId) {
       setMenu(null);
       ensureVisible(routeId);
@@ -209,16 +256,38 @@ export default function TreePage() {
   const openPerson = (id: number, kind: "view" | "edit" = "view") => {
     setMenu(null);
     setPanel({ kind, id });
-    navigate(`${src.base}/p/${id}`, { replace: true });
+    if (!network) navigate(`${src.base}/p/${id}`, { replace: true });
   };
   const closePanel = () => {
     setPanel(null);
-    if (routeId != null) navigate(src.base, { replace: true });
+    if (routeId != null && !network) navigate(src.base, { replace: true });
   };
   const goTo = (id: number) => {
+    if (network) {
+      // Trong mạng lưới: bấm vào người thân trong hồ sơ là chuyển tâm sang người đó
+      setMenu(null);
+      setPanel({ kind: "view", id });
+      if (id !== center) navigate(netPath(id));
+      return;
+    }
+    if (graph?.get(id)?.kind === "extended") {
+      navigate(netPath(id));
+      return;
+    }
     ensureVisible(id);
     openPerson(id);
     setTimeout(() => focus(id), 60);
+  };
+  const highlightPath = (path: number[]) => {
+    ui.set({ highlight: path });
+    const onTree = !network && path.every((id) => layout?.byPerson.has(id));
+    if (onTree || (network && path[0] === center)) {
+      setTimeout(() => focus(path[path.length - 1], false), 50);
+      return;
+    }
+    // Đường nối đi qua nhà thông gia (không có trên cây) → xem ở mạng lưới, lấy người A làm tâm
+    pendingFocus.current = path[path.length - 1];
+    navigate(netPath(path[0]));
   };
 
   const onAction = (a: NodeAction) => {
@@ -244,6 +313,9 @@ export default function TreePage() {
       case "copy":
         void navigator.clipboard?.writeText(`${location.origin}${src.base}/p/${id}`);
         return setMenu(null);
+      case "network":
+        setMenu(null);
+        return navigate(netPath(id));
       case "addChild":
       case "addSpouse":
       case "addSibling":
@@ -287,7 +359,8 @@ export default function TreePage() {
     await run("Đã đổi tên", () => patch(`/api/admin/persons/${p.id}`, { version: p.version, full_name: value }));
   };
 
-  const exportName = `gia-pha-${(graph?.clan ?? "").replace(/\s+/g, "-").toLowerCase() || "dong-ho"}`;
+  const exportName = `${network ? "mang-luoi" : "gia-pha"}-${(graph?.clan ?? "").replace(/\s+/g, "-").toLowerCase() || "dong-ho"}`;
+  const exportTitle = network && center != null ? `Mạng lưới quan hệ của ${graph?.get(center)?.name}` : `Gia phả ${graph?.clan}`;
 
   // ---- hiển thị -------------------------------------------------------
   if (isLoading)
@@ -298,6 +371,8 @@ export default function TreePage() {
     );
   if (error || !graph)
     return <Empty title="Không tải được cây gia phả">{(error as Error)?.message}</Empty>;
+  if (network && graph.persons.size > 0 && center == null)
+    return <Empty title="Chưa có ai để làm tâm mạng lưới">Hãy chọn một người bằng ô tìm kiếm.</Empty>;
 
   if (graph.persons.size === 0) {
     return (
@@ -352,11 +427,34 @@ export default function TreePage() {
               {ui.reverse ? "Họ gọi tôi" : "Tôi gọi họ"}
             </Button>
           )}
+          {network && center != null && (
+            <span className="flex items-center gap-1 px-2 text-[15px] font-semibold text-brand-800">
+              <Share2 className="size-4" /> {graph.get(center)?.name}
+            </span>
+          )}
           <div className="relative">
-            <Button size="sm" variant={ui.hideNgoai || ui.branch ? "gold" : "ghost"} icon={<Filter className="size-4" />} onClick={(e) => { e.stopPropagation(); setShowFilters((v) => !v); setShowExport(false); }}>
-              Lọc
+            <Button size="sm" variant={!network && (ui.hideNgoai || ui.branch) ? "gold" : "ghost"} icon={<Filter className="size-4" />} onClick={(e) => { e.stopPropagation(); setShowFilters((v) => !v); setShowExport(false); }}>
+              {network ? "Phạm vi" : "Lọc"}
             </Button>
-            {showFilters && (
+            {showFilters && network && (
+              <div className="absolute left-0 top-full z-30 mt-2 w-80 rounded-xl border border-stone-200 bg-white p-4 shadow-xl" onPointerDown={(e) => e.stopPropagation()}>
+                <p className="mb-2 font-semibold text-stone-700">Hiện người thân trong phạm vi</p>
+                <div className="grid gap-1" role="radiogroup">
+                  {RADIUS.map((r) => (
+                    <label key={r.v} className="flex min-h-10 cursor-pointer items-center gap-2 rounded-lg px-2 hover:bg-stone-100">
+                      <input type="radio" name="radius" checked={ui.netRadius === r.v} onChange={() => ui.set({ netRadius: r.v })} className="size-4 accent-brand-800" />
+                      <span>{r.v} bước · {r.label}</span>
+                    </label>
+                  ))}
+                </div>
+                <p className="mt-2 text-sm text-stone-500">Bấm vào một người rồi chọn “Đặt làm tâm mạng lưới” để đi tiếp sang họ hàng của người đó.</p>
+                <div className="mt-4 border-t border-stone-200 pt-3">
+                  <p className="mb-2 flex items-center gap-1 font-semibold text-stone-700"><Info className="size-4" /> Chú giải</p>
+                  <Legend network />
+                </div>
+              </div>
+            )}
+            {showFilters && !network && (
               <div className="absolute left-0 top-full z-30 mt-2 w-80 rounded-xl border border-stone-200 bg-white p-4 shadow-xl" onPointerDown={(e) => e.stopPropagation()}>
                 <Toggle checked={ui.hideNgoai} onChange={(v) => ui.set({ hideNgoai: v })} label="Chỉ xem nội tộc" description="Ẩn các nhánh dòng ngoại (con của con gái)" />
                 {graph.branches.length > 0 && (
@@ -382,8 +480,13 @@ export default function TreePage() {
               </div>
             )}
           </div>
+          {!network && (
+            <Button size="sm" variant="ghost" icon={<Share2 className="size-4" />} onClick={() => navigate(netPath(selectedId ?? kin.meId ?? graph.rootId ?? 0))}>
+              <span className="hidden sm:inline">Mạng lưới</span>
+            </Button>
+          )}
           <Button size="sm" variant="ghost" icon={<GitCompare className="size-4" />} onClick={() => setModal({ kind: "compare", id: kin.meId })}>
-            <span className="hidden sm:inline">So sánh</span>
+            <span className="hidden sm:inline">Tra cứu quan hệ</span>
           </Button>
           <div className="relative">
             <Button size="sm" variant="ghost" icon={<Download className="size-4" />} onClick={(e) => { e.stopPropagation(); setShowExport((v) => !v); setShowFilters(false); }}>
@@ -392,9 +495,9 @@ export default function TreePage() {
             {showExport && layout && (
               <div className="absolute right-0 top-full z-30 mt-2 w-64 rounded-xl border border-stone-200 bg-white p-2 shadow-xl sm:left-0 sm:right-auto" onPointerDown={(e) => e.stopPropagation()}>
                 {[
-                  { icon: <Printer className="size-5" />, label: "In / Lưu PDF", fn: () => printTree(buildSVG(layout, graph, badges, `Gia phả ${graph.clan}`), `Gia phả ${graph.clan}`) || toast.error("Trình duyệt chặn cửa sổ mới") },
+                  { icon: <Printer className="size-5" />, label: "In / Lưu PDF", fn: () => printTree(buildSVG(layout, graph, badges, exportTitle), exportTitle) || toast.error("Trình duyệt chặn cửa sổ mới") },
                   { icon: <FileImage className="size-5" />, label: "Ảnh PNG", fn: () => void downloadPNG(layout, graph, badges, exportName) },
-                  { icon: <FileImage className="size-5" />, label: "Ảnh vector SVG", fn: () => downloadSVG(buildSVG(layout, graph, badges, `Gia phả ${graph.clan}`), exportName) },
+                  { icon: <FileImage className="size-5" />, label: "Ảnh vector SVG", fn: () => downloadSVG(buildSVG(layout, graph, badges, exportTitle), exportName) },
                   ...(admin ? [{ icon: <FileSpreadsheet className="size-5" />, label: "Danh sách Excel", fn: () => window.open("/api/admin/export/persons.xlsx", "_blank") }] : []),
                 ].map((x) => (
                   <button key={x.label} className="flex min-h-11 w-full items-center gap-3 rounded-lg px-3 text-left hover:bg-stone-100" onClick={() => { setShowExport(false); x.fn(); }}>
@@ -446,6 +549,8 @@ export default function TreePage() {
           ego={kin.ego}
           relation={kin.relations?.get(menu.id) ?? null}
           collapsed={collapsed.has(menu.id)}
+          networkMode={network}
+          isCenter={menu.id === center}
           onAction={onAction}
           onClose={() => setMenu(null)}
         />
@@ -478,6 +583,7 @@ export default function TreePage() {
           onClose={closePanel}
           onOpen={goTo}
           onEdit={() => setPanel({ kind: "edit", id: panel.id })}
+          onNetwork={network && panel.id === center ? undefined : () => navigate(netPath(panel.id))}
         />
       )}
       <Suspense fallback={null}>
@@ -498,7 +604,7 @@ export default function TreePage() {
         />
       )}
       {modal?.kind === "delete" && (
-        <DeleteDialog personId={modal.id} onClose={() => setModal(null)} onDeleted={() => panel?.id === modal.id && closePanel()} />
+        <DeleteDialog personId={modal.id} kind={graph.get(modal.id)?.kind} onClose={() => setModal(null)} onDeleted={() => panel?.id === modal.id && closePanel()} />
       )}
       {modal?.kind === "reorder" && <ReorderDialog graph={graph} personId={modal.id} onClose={() => setModal(null)} />}
       </Suspense>
@@ -508,10 +614,7 @@ export default function TreePage() {
           rules={rules}
           initialA={modal.id}
           onClose={() => setModal(null)}
-          onHighlight={(p) => {
-            ui.set({ highlight: p });
-            setTimeout(() => focus(p[p.length - 1], false), 50);
-          }}
+          onHighlight={highlightPath}
         />
       )}
     </div>

@@ -421,6 +421,7 @@ export class TreeRenderer {
     ctx.lineWidth = selected ? 4 : 2;
     ctx.strokeStyle = selected ? COLORS.selected : p.lineage ? pal.stroke : pal.soft;
     if (p.ngoai && !selected) ctx.setLineDash([7, 5]);
+    else if (p.kind === "extended" && !selected) ctx.setLineDash([2, 4]);
     ctx.stroke();
     ctx.setLineDash([]);
 

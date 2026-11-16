@@ -46,7 +46,9 @@ const S = (el: ReactNode) => (
 
 const sharedChildren = [
   // Một route duy nhất cho cây (/, /p/:id) để trang cây không bị mount lại khi chọn người
-  { path: "p?/:personId?", element: <TreePage /> },
+  { path: "p?/:personId?", element: <TreePage key="tree" /> },
+  // Mạng lưới quan hệ quanh một người (gồm nhà thông gia)
+  { path: "mang-luoi/:personId?", element: <TreePage key="network" network /> },
   { path: "danh-sach", element: S(<ListPage />) },
   { path: "ngay-gio", element: S(<AnniversaryPage />) },
   { path: "pha-ky", element: S(<PhaKyPage />) },

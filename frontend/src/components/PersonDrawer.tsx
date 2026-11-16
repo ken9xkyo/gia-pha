@@ -1,4 +1,4 @@
-import { History, Link2, MapPin, Pencil } from "lucide-react";
+import { History, Link2, MapPin, Pencil, Share2 } from "lucide-react";
 import type { ReactNode } from "react";
 import { Link } from "react-router";
 import { toast } from "sonner";
@@ -9,7 +9,7 @@ import type { Ego, Relation } from "@/lib/kinship";
 import type { Rules } from "@/lib/kinshipRules";
 import { birthText, deathText, gioText, LINK_KIND, STATUS, UNION_KIND, UNION_STATUS, lifeSpan } from "@/lib/format";
 import { initials } from "@/lib/text";
-import { KinshipCard } from "./NodeMenu";
+import { KinshipCard, personTags } from "./NodeMenu";
 import { Button, Drawer, Spinner } from "./ui";
 
 function Row({ label, children }: { label: string; children: ReactNode }) {
@@ -46,6 +46,7 @@ export function PersonDrawer({
   onClose,
   onOpen,
   onEdit,
+  onNetwork,
 }: {
   graph: FamilyGraph;
   rules: Rules;
@@ -56,6 +57,8 @@ export function PersonDrawer({
   onClose: () => void;
   onOpen: (id: number) => void;
   onEdit: () => void;
+  /** Mở mạng lưới quan hệ lấy người này làm tâm (bỏ trống khi đang ở đúng tâm đó) */
+  onNetwork?: () => void;
 }) {
   const admin = useIsAdmin();
   const { data: d, isLoading } = usePerson(personId);
@@ -102,11 +105,14 @@ export function PersonDrawer({
         <div className="min-w-0">
           <h3 className="text-xl font-bold text-stone-900">{node.name}</h3>
           <p className="text-[15px] text-stone-600">
-            {[node.gen ? `Đời ${node.gen}` : null, node.gender === "M" ? "Nam" : "Nữ", !node.lineage ? (node.gender === "F" ? "Dâu" : "Rể") : null, node.ngoai ? "Dòng ngoại" : null]
-              .filter(Boolean)
-              .join(" · ")}
+            {[node.gender === "M" ? "Nam" : "Nữ", ...personTags(graph, personId).filter((t) => t !== node.branch)].join(" · ")}
           </p>
           {node.branch && <p className="text-[15px] text-stone-600">Chi/phái: {node.branch}</p>}
+          {onNetwork && (
+            <button onClick={onNetwork} className="mt-1 inline-flex items-center gap-1 text-[15px] font-semibold text-brand-700 hover:underline">
+              <Share2 className="size-4" /> Xem mạng lưới quan hệ
+            </button>
+          )}
         </div>
       </div>
 

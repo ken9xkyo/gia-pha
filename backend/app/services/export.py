@@ -15,6 +15,7 @@ from app.services.graph import load_graph
 
 GENDER = {"M": "Nam", "F": "Nữ"}
 STATUS = {"alive": "Còn sống", "deceased": "Đã mất", "unknown": "Không rõ"}
+CATEGORY = {"lineage": "Huyết thống", "inlaw": "Dâu/Rể", "extended": "Nhà thông gia", "orphan": "Chưa nối vào cây"}
 UNION_KIND = {"chinh_that": "Chính thất", "ke_that": "Kế thất", "thu_that": "Thứ thất", "chong": "Chồng"}
 UNION_STATUS = {"married": "Chung sống", "widowed": "Góa", "divorced": "Ly hôn"}
 LINK_KIND = {"biological": "Ruột", "adopted": "Nuôi", "step": "Con riêng"}
@@ -47,7 +48,7 @@ def _plain(html: str | None) -> str:
 async def export_xlsx(db: AsyncSession, clan_name: str) -> bytes:
     g = await load_graph(db)
     gens = g.generations()
-    lineage = g.lineage()
+    cats = g.categories()
     persons = (
         await db.execute(select(Person).where(Person.deleted_at.is_(None)).order_by(Person.id))
     ).scalars().all()
@@ -57,7 +58,7 @@ async def export_xlsx(db: AsyncSession, clan_name: str) -> bytes:
     ws = wb.active
     ws.title = "Thành viên"
     headers = [
-        "Mã", "Họ tên", "Giới tính", "Đời", "Chi/phái", "Thứ tự", "Huyết thống", "Tên húy", "Tên tự", "Tên hiệu",
+        "Mã", "Họ tên", "Giới tính", "Đời", "Chi/phái", "Thứ tự", "Phân loại", "Tên húy", "Tên tự", "Tên hiệu",
         "Thụy hiệu", "Ngày sinh", "Giờ sinh", "Tình trạng", "Ngày mất (DL)", "Ngày mất (ÂL)", "Giỗ (nhập riêng)",
         "Nơi an táng", "Cải táng", "Quê quán", "Nơi ở", "Nghề nghiệp", "Điện thoại", "Cha", "Mẹ", "Vợ/Chồng", "Tiểu sử",
     ]
@@ -77,7 +78,7 @@ async def export_xlsx(db: AsyncSession, clan_name: str) -> bytes:
         spouses = ", ".join(name_of(s) for s in g.spouses(p.id))
         ws.append([
             p.id, p.full_name, GENDER[p.gender], gens.get(p.id), p.branch_label or "", p.birth_order,
-            "Huyết thống" if p.id in lineage else "Dâu/Rể", p.ten_huy or "", p.ten_tu or "", p.ten_hieu or "",
+            CATEGORY[cats.get(p.id, "orphan")], p.ten_huy or "", p.ten_tu or "", p.ten_hieu or "",
             p.thuy_hieu or "",
             _date(p.birth_year, p.birth_month, p.birth_day, p.birth_approx, p.birth_calendar == "lunar", p.birth_lunar_leap),
             p.birth_time or "", STATUS[p.living_status],

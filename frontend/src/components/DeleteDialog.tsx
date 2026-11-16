@@ -2,12 +2,23 @@ import { useQuery } from "@tanstack/react-query";
 import { useState } from "react";
 import { get, post } from "@/api/client";
 import type { DeletePreview, MutationResult } from "@/api/types";
+import type { PersonKind } from "@/lib/graph";
 import { normalize } from "@/lib/text";
 import { useMutate } from "./mutate";
 import { Button, Dialog, Input, Spinner } from "./ui";
 
 /** Xóa an toàn (FR-30..34): xóa mềm vào Thùng rác 30 ngày. */
-export function DeleteDialog({ personId, onClose, onDeleted }: { personId: number; onClose: () => void; onDeleted: () => void }) {
+export function DeleteDialog({
+  personId,
+  kind,
+  onClose,
+  onDeleted,
+}: {
+  personId: number;
+  kind?: PersonKind;
+  onClose: () => void;
+  onDeleted: () => void;
+}) {
   const run = useMutate();
   const [typed, setTyped] = useState("");
   const [busy, setBusy] = useState(false);
@@ -24,7 +35,7 @@ export function DeleteDialog({ personId, onClose, onDeleted }: { personId: numbe
     if (!data) return;
     setBusy(true);
     const r = await run(
-      data.mode === "branch" ? `Đã xóa nhánh ${name} (${data.count} người) vào Thùng rác` : `Đã xóa ${name} vào Thùng rác`,
+      data.count > 1 ? `Đã xóa ${name} và ${data.count - 1} người liên quan vào Thùng rác` : `Đã xóa ${name} vào Thùng rác`,
       () => post<MutationResult>(`/api/admin/persons/${personId}/delete`, { mode: data.mode, confirm_name: typed }),
     );
     setBusy(false);
@@ -38,14 +49,14 @@ export function DeleteDialog({ personId, onClose, onDeleted }: { personId: numbe
     <Dialog
       open
       onClose={onClose}
-      title={data?.mode === "branch" ? `Xóa cả nhánh (${data.count} người)` : `Xóa ${name}`}
+      title={data?.mode === "branch" ? `Xóa cả nhánh (${data.count} người)` : data && data.count > 1 ? `Xóa ${name} (${data.count} người)` : `Xóa ${name}`}
       size="sm"
       footer={
         <>
           <Button onClick={onClose}>Hủy</Button>
           {data?.mode !== "blocked" && (
             <Button variant="danger" disabled={!ok} loading={busy} onClick={submit}>
-              {data?.mode === "branch" ? `Xóa cả nhánh (${data.count} người)` : "Xóa"}
+              {data?.mode === "branch" ? `Xóa cả nhánh (${data.count} người)` : data && data.count > 1 ? `Xóa ${data.count} người` : "Xóa"}
             </Button>
           )}
         </>
@@ -62,16 +73,30 @@ export function DeleteDialog({ personId, onClose, onDeleted }: { personId: numbe
           {data.mode === "single" && <p>Xóa <strong>{name}</strong>? Các quan hệ hôn nhân của người này sẽ được gỡ theo.</p>}
           {data.mode === "inlaw" && (
             <p>
-              <strong>{name}</strong> là dâu/rể.{" "}
+              <strong>{name}</strong> {kind === "inlaw" ? "là dâu/rể" : kind === "extended" ? "thuộc nhà thông gia" : "không thuộc dòng họ"}.{" "}
               {data.keeps_children
-                ? "Các con chung vẫn được giữ trên cây; vị trí vợ/chồng sẽ chuyển thành “không rõ tên”."
+                ? "Các con chung vẫn được giữ; vị trí vợ/chồng sẽ chuyển thành “không rõ tên”."
                 : "Quan hệ hôn nhân sẽ được gỡ theo."}
             </p>
+          )}
+          {data.mode !== "branch" && data.detached_count > 0 && (
+            <>
+              <p>
+                Sau khi xóa, <strong>{data.detached_count} người</strong> sẽ không còn đường nối nào về dòng họ nên bị xóa theo:
+              </p>
+              <ul className="max-h-40 list-disc overflow-y-auto pl-5 text-[15px]">
+                {data.detached_names.map((n, i) => (
+                  <li key={i}>{n}</li>
+                ))}
+                {data.detached_count > data.detached_names.length && <li>… và {data.detached_count - data.detached_names.length} người khác</li>}
+              </ul>
+            </>
           )}
           {data.mode === "branch" && (
             <>
               <p>
-                <strong>{name}</strong> có hậu duệ. Không thể để lại nhánh mồ côi nên toàn bộ <strong>{data.count} người</strong> sẽ bị xóa:
+                <strong>{name}</strong> có hậu duệ. Không thể để lại nhánh mồ côi nên toàn bộ <strong>{data.count} người</strong> sẽ bị xóa
+                {data.detached_count > 0 && <> (kể cả {data.detached_count} người bên nhà thông gia không còn đường nối về dòng họ)</>}:
               </p>
               <ul className="max-h-40 list-disc overflow-y-auto pl-5 text-[15px]">
                 {data.names.map((n, i) => (

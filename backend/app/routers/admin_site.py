@@ -378,12 +378,14 @@ async def stats(admin: Admin = Depends(current_admin), db: AsyncSession = Depend
         )
     ).one()
     gens = g.generations()
+    cats = list(g.categories().values())
     return {
         "persons": len(g.persons),
         "lineage": len(lineage),
-        "inlaws": len(g.persons) - len(lineage),
+        "inlaws": cats.count("inlaw"),
+        "extended": cats.count("extended"),
         "generations": max(gens.values()) if gens else 0,
-        "disconnected": len([p for p in g.persons if p not in gens]),
+        "disconnected": cats.count("orphan"),
         "with_siblings": with_siblings,
         "with_order": with_order,
         "visits_30d": int(visits[0]),

@@ -41,6 +41,59 @@ function GenderPick({ value, onChange, fixed }: { value: Gender; onChange: (g: G
   );
 }
 
+type PickMode = "new" | "existing";
+
+function ModeTabs({ value, onChange }: { value: PickMode; onChange: (v: PickMode) => void }) {
+  return (
+    <div className="grid grid-cols-2 gap-1 rounded-lg bg-stone-100 p-1">
+      {(["new", "existing"] as const).map((t) => (
+        <button
+          key={t}
+          type="button"
+          onClick={() => onChange(t)}
+          className={clsx("min-h-10 rounded-md font-semibold", value === t ? "bg-white shadow" : "text-stone-600")}
+        >
+          {t === "new" ? "Người mới" : "Chọn người có sẵn"}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+/** Chọn một người có sẵn trên cây (lọc theo giới tính, bỏ chính người đó và vợ/chồng). */
+function ExistingPick({
+  graph,
+  gender,
+  exclude,
+  value,
+  onChange,
+  autoFocus,
+}: {
+  graph: FamilyGraph;
+  gender: Gender;
+  exclude: Set<number>;
+  value: number | null;
+  onChange: (id: number | null) => void;
+  autoFocus?: boolean;
+}) {
+  return (
+    <>
+      <PersonSearch
+        graph={graph}
+        autoFocus={autoFocus}
+        filter={(x) => x.gender === gender && !exclude.has(x.id)}
+        onPick={(x) => onChange(x.id)}
+        placeholder={gender === "M" ? "Tìm người cha đã có…" : "Tìm người mẹ đã có…"}
+      />
+      {value != null && (
+        <p className="mt-1 font-semibold text-brand-800">
+          Đã chọn: {graph.get(value)?.name} <span className="font-normal text-stone-500">{graph.hint(value)}</span>
+        </p>
+      )}
+    </>
+  );
+}
+
 interface Props {
   graph: FamilyGraph;
   mode: AddMode;
@@ -78,7 +131,16 @@ export function QuickAdd({ graph, mode, personId, onClose, onCreated }: Props) {
   const [existing, setExisting] = useState<number | null>(null);
   const [tab, setTab] = useState<"new" | "existing">("new");
   const [motherName, setMotherName] = useState("");
+  const [fatherMode, setFatherMode] = useState<PickMode>("new");
+  const [fatherId, setFatherId] = useState<number | null>(null);
+  /** "new" | "existing" | "u<id>" (con của cuộc hôn nhân có sẵn của người cha đã chọn) */
+  const [motherChoice, setMotherChoice] = useState<string>("new");
+  const [motherId, setMotherId] = useState<number | null>(null);
   const [busy, setBusy] = useState(false);
+  const isRoot = personId != null && graph.rootId === personId;
+  const exclude = useMemo(() => new Set(p ? [p.id, ...graph.spouses(p.id)] : []), [graph, p]);
+  const fatherUnions = fatherMode === "existing" && fatherId != null ? graph.get(fatherId)?.unions ?? [] : [];
+  useEffect(() => setMotherChoice(fatherUnions.length ? `u${fatherUnions[0]}` : "new"), [fatherId, fatherMode]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => setName(defaultSurname), [defaultSurname]);
 
@@ -92,7 +154,7 @@ export function QuickAdd({ graph, mode, personId, onClose, onCreated }: Props) {
     child: `Thêm con cho ${p?.name}`,
     spouse: `Thêm ${p?.gender === "M" ? "vợ" : "chồng"} cho ${p?.name}`,
     sibling: `Thêm anh/chị/em của ${p?.name}`,
-    parents: `Thêm cha mẹ cho thủy tổ ${p?.name}`,
+    parents: isRoot ? `Thêm cha mẹ cho thủy tổ ${p?.name}` : `Thêm cha mẹ cho ${p?.name}`,
     root: "Tạo thủy tổ",
   }[mode];
 
@@ -128,13 +190,22 @@ export function QuickAdd({ graph, mode, personId, onClose, onCreated }: Props) {
         post<MutationResult>(`${base}/${personId}/spouses`, tab === "existing" ? { existing_person_id: existing, kind } : { person: person(), kind }),
       );
     } else if (mode === "parents") {
-      const father = name.trim() && name.trim() !== defaultSurname.trim() ? { full_name: name.trim(), gender: "M" } : null;
-      const mother = motherName.trim() ? { full_name: motherName.trim(), gender: "F" } : null;
-      if (!father && !mother) {
-        setBusy(false);
-        return nameRef.current?.focus();
+      const body: Record<string, unknown> = { link_kind: linkKind };
+      if (motherChoice.startsWith("u")) body.union_id = Number(motherChoice.slice(1));
+      else {
+        if (fatherMode === "existing" && fatherId != null) body.father_id = fatherId;
+        else if (fatherMode === "new" && name.trim() && name.trim() !== defaultSurname.trim()) body.father = { full_name: name.trim(), gender: "M" };
+        if (motherChoice === "existing" && motherId != null) body.mother_id = motherId;
+        else if (motherChoice === "new" && motherName.trim()) body.mother = { full_name: motherName.trim(), gender: "F" };
       }
-      r = await run("Đã thêm cha mẹ", () => post<MutationResult>(`${base}/${personId}/parents`, { father, mother }));
+      if (!["union_id", "father", "father_id", "mother", "mother_id"].some((k) => k in body)) {
+        setBusy(false);
+        if (fatherMode === "new") nameRef.current?.focus();
+        return;
+      }
+      r = await run("Đã thêm cha mẹ", (confirm) =>
+        post<MutationResult>(`${base}/${personId}/parents`, { ...body, confirm_warnings: confirm }),
+      );
     }
     setBusy(false);
     if (!r) return;
@@ -206,7 +277,52 @@ export function QuickAdd({ graph, mode, personId, onClose, onCreated }: Props) {
           </div>
         )}
 
-        {mode === "spouse" && tab === "existing" ? (
+        {mode === "parents" ? (
+          <>
+            <Field label="Cha">
+              {!isRoot && <ModeTabs value={fatherMode} onChange={setFatherMode} />}
+              {fatherMode === "new" || isRoot ? (
+                <Input ref={nameRef} autoFocus value={name} onChange={(e) => setName(e.target.value)} placeholder="Họ tên cha — có thể để trống" className={clsx(!isRoot && "mt-2")} />
+              ) : (
+                <div className="mt-2">
+                  <ExistingPick graph={graph} gender="M" exclude={exclude} value={fatherId} onChange={setFatherId} autoFocus />
+                </div>
+              )}
+            </Field>
+            <Field label="Mẹ" hint={fatherUnions.length ? "Chọn vợ của người cha đã chọn, hoặc người khác" : undefined}>
+              {fatherUnions.length > 0 && (
+                <Select value={motherChoice} onChange={(e) => setMotherChoice(e.target.value)}>
+                  {fatherUnions.map((uid) => {
+                    const sp = graph.partnerIn(uid, fatherId!);
+                    return (
+                      <option key={uid} value={`u${uid}`}>
+                        {sp != null ? graph.get(sp)!.name : "Không rõ tên"} ({UNION_KIND[graph.unions.get(uid)!.kind]})
+                      </option>
+                    );
+                  })}
+                  <option value="new">Người khác — nhập mới</option>
+                  <option value="existing">Người khác — chọn người có sẵn</option>
+                </Select>
+              )}
+              {!fatherUnions.length && !isRoot && (
+                <ModeTabs value={motherChoice === "existing" ? "existing" : "new"} onChange={(v) => setMotherChoice(v)} />
+              )}
+              {(motherChoice === "new" || isRoot) && (
+                <Input value={motherName} onChange={(e) => setMotherName(e.target.value)} placeholder="Họ tên mẹ — có thể để trống" className={clsx(!isRoot && "mt-2")} />
+              )}
+              {motherChoice === "existing" && !isRoot && (
+                <div className="mt-2">
+                  <ExistingPick graph={graph} gender="F" exclude={exclude} value={motherId} onChange={setMotherId} />
+                </div>
+              )}
+            </Field>
+            {!isRoot && (
+              <p className="text-sm text-stone-600">
+                Chọn người có sẵn khi cha/mẹ đã có trên cây — VD: hai anh em trong họ lấy hai chị em ruột, hoặc bố mẹ của dâu/rể vốn là người trong họ.
+              </p>
+            )}
+          </>
+        ) : mode === "spouse" && tab === "existing" ? (
           <Field label="Chọn người đã có trên cây" hint="Dùng cho hôn nhân nội tộc xa hoặc khi lỡ nhập trùng">
             <PersonSearch
               graph={graph}
@@ -218,34 +334,26 @@ export function QuickAdd({ graph, mode, personId, onClose, onCreated }: Props) {
           </Field>
         ) : (
           <>
-            <Field label={mode === "parents" ? "Họ tên cha" : "Họ tên *"}>
+            <Field label="Họ tên *">
               <Input ref={nameRef} autoFocus value={name} onChange={(e) => setName(e.target.value)} placeholder="VD: Nguyễn Văn An" />
             </Field>
-            {mode === "parents" ? (
-              <Field label="Họ tên mẹ">
-                <Input value={motherName} onChange={(e) => setMotherName(e.target.value)} placeholder="Có thể để trống" />
+            <Field label="Giới tính *">
+              <GenderPick value={gender} onChange={setGender} fixed={mode === "spouse"} />
+            </Field>
+            <div className="grid grid-cols-2 gap-3">
+              <Field label="Năm sinh">
+                <Input value={birthYear} onChange={(e) => setBirthYear(e.target.value.replace(/\D/g, ""))} inputMode="numeric" placeholder="Không bắt buộc" />
               </Field>
-            ) : (
-              <Field label="Giới tính *">
-                <GenderPick value={gender} onChange={setGender} fixed={mode === "spouse"} />
-              </Field>
-            )}
-            {mode !== "parents" && (
-              <div className="grid grid-cols-2 gap-3">
-                <Field label="Năm sinh">
-                  <Input value={birthYear} onChange={(e) => setBirthYear(e.target.value.replace(/\D/g, ""))} inputMode="numeric" placeholder="Không bắt buộc" />
+              {(mode === "child" || mode === "sibling") && (
+                <Field label="Thứ tự" hint={`Mặc định: ${nextOrder}`}>
+                  <Input value={order} onChange={(e) => setOrder(e.target.value.replace(/\D/g, ""))} inputMode="numeric" placeholder={String(nextOrder)} />
                 </Field>
-                {(mode === "child" || mode === "sibling") && (
-                  <Field label="Thứ tự" hint={`Mặc định: ${nextOrder}`}>
-                    <Input value={order} onChange={(e) => setOrder(e.target.value.replace(/\D/g, ""))} inputMode="numeric" placeholder={String(nextOrder)} />
-                  </Field>
-                )}
-              </div>
-            )}
+              )}
+            </div>
           </>
         )}
 
-        {mode === "child" && (
+        {(mode === "child" || (mode === "parents" && !isRoot)) && (
           <Field label="Loại quan hệ">
             <Select value={linkKind} onChange={(e) => setLinkKind(e.target.value as LinkKind)}>
               {Object.entries(LINK_KIND).map(([k, v]) => (

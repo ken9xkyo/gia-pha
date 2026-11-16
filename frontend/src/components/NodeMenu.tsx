@@ -9,6 +9,7 @@ import {
   GitCompare,
   Heart,
   Pencil,
+  Share2,
   Trash2,
   UserPlus,
   UserRound,
@@ -18,7 +19,7 @@ import {
 import { useMemo, type ReactNode } from "react";
 import { toast } from "sonner";
 import type { FamilyGraph } from "@/lib/graph";
-import { Kinship, type Relation } from "@/lib/kinship";
+import { GENERIC_KEYS, Kinship, type Relation } from "@/lib/kinship";
 import type { Rules } from "@/lib/kinshipRules";
 import { lifeSpan } from "@/lib/format";
 import { capitalize } from "@/lib/text";
@@ -27,7 +28,7 @@ import type { Ego } from "@/lib/kinship";
 import { IconButton } from "./ui";
 
 export type NodeAction =
-  | "view" | "me" | "compare" | "toggle" | "copy"
+  | "view" | "me" | "compare" | "toggle" | "copy" | "network"
   | "addChild" | "addSpouse" | "addSibling" | "addParents" | "edit" | "reorder" | "delete";
 
 interface Props {
@@ -40,6 +41,9 @@ interface Props {
   ego: Ego | null;
   relation: Relation | null;
   collapsed: boolean;
+  /** Đang ở chế độ mạng lưới: "network" nghĩa là đặt người này làm tâm */
+  networkMode?: boolean;
+  isCenter?: boolean;
   onAction: (a: NodeAction) => void;
   onClose: () => void;
 }
@@ -64,7 +68,7 @@ export function KinshipCard({ graph, rules, personId, ego, relation }: Pick<Prop
         )}
       </div>
       <p className="mt-1 text-stone-700">Quan hệ: {relation.description}</p>
-      {reverse && reverse.key !== "unknown" && (
+      {reverse && !GENERIC_KEYS.has(reverse.key) && (
         <p className="mt-1 text-stone-600">
           Người này gọi bạn là <strong>{capitalize(reverse.label)}</strong>
         </p>
@@ -72,6 +76,21 @@ export function KinshipCard({ graph, rules, personId, ego, relation }: Pick<Prop
       {relation.note && <p className="mt-1 text-sm font-medium text-amber-800">⚠ {relation.note}</p>}
     </div>
   );
+}
+
+/** Nhãn ngắn: đời, dâu/rể, nhà thông gia, dòng ngoại, chi, thủy tổ. */
+export function personTags(graph: FamilyGraph, id: number): string[] {
+  const p = graph.get(id);
+  if (!p) return [];
+  const tags: string[] = [];
+  if (p.gen && p.kind !== "extended") tags.push(`Đời ${p.gen}`);
+  if (p.kind === "inlaw") tags.push(p.gender === "F" ? "Dâu" : "Rể");
+  if (p.kind === "extended") tags.push("Nhà thông gia");
+  if (p.kind === "orphan" && graph.rootId !== id) tags.push("Chưa nối vào cây");
+  if (p.ngoai) tags.push("Dòng ngoại");
+  if (p.branch) tags.push(p.branch);
+  if (graph.rootId === id) tags.push("Thủy tổ");
+  return tags;
 }
 
 function Item({ icon, children, onClick, danger }: { icon: ReactNode; children: ReactNode; onClick: () => void; danger?: boolean }) {
@@ -90,18 +109,14 @@ function Item({ icon, children, onClick, danger }: { icon: ReactNode; children: 
 }
 
 export function NodeMenu(props: Props) {
-  const { graph, personId, rect, container, admin, relation, collapsed, onAction, onClose } = props;
+  const { graph, personId, rect, container, admin, relation, collapsed, networkMode, isCenter, onAction, onClose } = props;
   const p = graph.get(personId);
   if (!p) return null;
   const hasChildren = graph.children(personId).length > 0;
   const isRoot = graph.rootId === personId;
   const hasParents = p.parentUnion != null;
-  const tags: string[] = [];
-  if (p.gen) tags.push(`Đời ${p.gen}`);
-  if (!p.lineage) tags.push(p.gender === "F" ? "Dâu" : "Rể");
-  if (p.ngoai) tags.push("Dòng ngoại");
-  if (p.branch) tags.push(p.branch);
-  if (isRoot) tags.push("Thủy tổ");
+  const noParentLinks = !graph.hasParents(personId);
+  const tags = personTags(graph, personId);
 
   const mobile = container.w < 640;
   const width = 340;
@@ -138,8 +153,13 @@ export function NodeMenu(props: Props) {
       <div className="mt-2 grid gap-0.5">
         <Item icon={<Eye />} onClick={() => onAction("view")}>Xem hồ sơ</Item>
         {relation?.key !== "self" && <Item icon={<UserRound />} onClick={() => onAction("me")}>Đây là tôi</Item>}
-        <Item icon={<GitCompare />} onClick={() => onAction("compare")}>So sánh với người khác</Item>
-        {hasChildren && (
+        <Item icon={<GitCompare />} onClick={() => onAction("compare")}>Tra cứu quan hệ với người khác</Item>
+        {!(networkMode && isCenter) && (
+          <Item icon={<Share2 />} onClick={() => onAction("network")}>
+            {networkMode ? "Đặt làm tâm mạng lưới" : "Xem mạng lưới quan hệ"}
+          </Item>
+        )}
+        {hasChildren && !networkMode && (
           <Item icon={collapsed ? <ChevronsUpDown /> : <ChevronsDownUp />} onClick={() => onAction("toggle")}>
             {collapsed ? `Mở rộng nhánh (${graph.descendantCount(personId)} người)` : "Thu gọn nhánh"}
           </Item>
@@ -159,7 +179,11 @@ export function NodeMenu(props: Props) {
             <Item icon={<Baby />} onClick={() => onAction("addChild")}>Thêm con</Item>
             <Item icon={<Heart />} onClick={() => onAction("addSpouse")}>Thêm {p.gender === "M" ? "vợ" : "chồng"}</Item>
             {hasParents && <Item icon={<Users />} onClick={() => onAction("addSibling")}>Thêm anh/chị/em</Item>}
-            {isRoot && !hasParents && <Item icon={<UserPlus />} onClick={() => onAction("addParents")}>Thêm cha/mẹ (lùi gốc lên một đời)</Item>}
+            {noParentLinks && (
+              <Item icon={<UserPlus />} onClick={() => onAction("addParents")}>
+                {isRoot ? "Thêm cha/mẹ (lùi gốc lên một đời)" : "Thêm cha/mẹ"}
+              </Item>
+            )}
             <Item icon={<Pencil />} onClick={() => onAction("edit")}>Sửa thông tin</Item>
             {graph.children(personId).length > 1 && (
               <Item icon={<ArrowDownUp />} onClick={() => onAction("reorder")}>Sắp xếp thứ tự các con</Item>

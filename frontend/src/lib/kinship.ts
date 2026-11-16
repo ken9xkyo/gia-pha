@@ -8,6 +8,7 @@
 import type { Gender } from "@/api/types";
 import type { FamilyGraph } from "./graph";
 import type { Rules } from "./kinshipRules";
+import { describePath, shortestPaths, type Step } from "./network";
 import { givenName } from "./text";
 
 export type Ego = { id: number } | { spouseOf: number; gender: Gender };
@@ -51,7 +52,10 @@ interface Classified {
   suffix: boolean;
 }
 
-const NO_NAME_KEYS = new Set(["self", "spouse", "parent", "grandparent_noi", "grandparent_ngoai", "inlaw_parent"]);
+const NO_NAME_KEYS = new Set(["self", "spouse", "parent", "grandparent_noi", "grandparent_ngoai", "inlaw_parent", "co_parent_inlaw"]);
+
+/** Nhãn chung (không phải danh xưng thật): không hiện "người này gọi bạn là…" */
+export const GENERIC_KEYS = new Set(["unknown", "inlaw_family", "related_far", "inlaw_relative_husband", "inlaw_relative_wife"]);
 const FIRST_WORD_CALL = new Set([
   "great_grandparent", "great2_grandparent", "grandpibling_noi_elder", "grandpibling_noi_younger",
   "grandpibling_ngoai_elder", "grandpibling_ngoai_younger", "grand_collateral",
@@ -62,6 +66,7 @@ const reverse = (b: Blood): Blood => ({ a: b.a, dE: b.dT, dT: b.dE, pathE: b.pat
 
 export class Kinship {
   private ancCache = new Map<number, Map<number, Anc>>();
+  private paths: ((b: number) => Step[] | null) | null = null;
   readonly egoId: number;
   private virtual: { spouseOf: number; gender: Gender } | null;
 
@@ -379,6 +384,8 @@ export class Kinship {
         if (rb) return this.twoSteps(e, s, t, r, rb);
       }
     }
+    const far = this.viaNetwork(e, t);
+    if (far) return far;
     const label = this.label("unknown", this.gender(t));
     return {
       key: "unknown",
@@ -395,6 +402,37 @@ export class Kinship {
     const out = new Map<number, Relation>();
     for (const id of this.g.persons.keys()) out.set(id, this.relate(id));
     return out;
+  }
+
+  /**
+   * Ngoài phạm vi bảng xưng hô (VD: cha mẹ của con dâu, anh em của chị dâu…): tìm đường nối
+   * ngắn nhất trong mạng lưới và mô tả theo chuỗi; cha mẹ hai bên thông gia gọi nhau là thông gia.
+   */
+  private viaNetwork(e: number, t: number): Relation | null {
+    const start = e === VIRTUAL_ID ? this.virtual!.spouseOf : e;
+    this.paths ??= shortestPaths(this.g, start);
+    const steps = this.paths(t);
+    if (!steps) return null;
+    const viaSpouse = e === VIRTUAL_ID;
+    const owner = viaSpouse ? `${this.gender(start) === "M" ? "chồng" : "vợ"} bạn` : "bạn";
+    const ids = [e, ...(viaSpouse ? [start] : []), ...steps.map((x) => x.to)];
+    const marriages = steps.filter((x) => x.rel === "husband" || x.rel === "wife").length + (viaSpouse ? 1 : 0);
+    const isChild = (x: Step) => (x.rel === "son" || x.rel === "daughter") && x.link !== "step";
+    const isParent = (x: Step) => (x.rel === "father" || x.rel === "mother") && x.link !== "step";
+    const coParent =
+      !viaSpouse && steps.length === 3 && isChild(steps[0]) && (steps[1].rel === "husband" || steps[1].rel === "wife") && isParent(steps[2]);
+    const key = coParent ? "co_parent_inlaw" : marriages ? "inlaw_family" : "related_far";
+    const gender = this.gender(t);
+    const label = this.label(key, gender);
+    return {
+      key,
+      label,
+      call: label,
+      xung: coParent ? this.pronoun(key, gender, label) : "",
+      description: describePath(this.g, steps, owner),
+      uncertain: false,
+      path: ids,
+    };
   }
 
   private note(uncertain: boolean) {

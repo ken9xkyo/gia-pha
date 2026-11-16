@@ -56,7 +56,7 @@ export function buildSVG(layout: Layout, graph: FamilyGraph, badges: Map<number,
       continue;
     }
     out.push(
-      `<rect x="${n.x}" y="${n.y}" width="${NODE_W}" height="${NODE_H}" rx="12" fill="${p.lineage ? pal.blood : pal.inlaw}" stroke="${p.lineage ? pal.stroke : pal.soft}" stroke-width="2"${p.ngoai ? ' stroke-dasharray="7 5"' : ""}/>`,
+      `<rect x="${n.x}" y="${n.y}" width="${NODE_W}" height="${NODE_H}" rx="12" fill="${p.lineage ? pal.blood : pal.inlaw}" stroke="${p.lineage ? pal.stroke : pal.soft}" stroke-width="2"${p.ngoai ? ' stroke-dasharray="7 5"' : p.kind === "extended" ? ' stroke-dasharray="2 4"' : ""}/>`,
     );
     if (p.status === "deceased")
       out.push(`<path d="M${n.x + NODE_W - 30},${n.y + 1} L${n.x + NODE_W - 12},${n.y + 1} Q${n.x + NODE_W - 1},${n.y + 1} ${n.x + NODE_W - 1},${n.y + 12} L${n.x + NODE_W - 1},${n.y + 30} Z" fill="${COLORS.deceased}"/>`);

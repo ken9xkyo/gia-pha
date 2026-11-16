@@ -204,6 +204,53 @@ async def test_add_parents_moves_root(admin):
     assert by_name(t, "Nguyễn Văn Cụ")["id"] == t["root"]
 
 
+async def test_inlaw_parents_network(admin):
+    t = await tree(admin)
+    hai = by_name(t, "Nguyễn Thị Hai")["id"]
+    chau = by_name(t, "Nguyễn Văn Cháu")["id"]
+    r = await admin.post(f"/api/admin/persons/{hai}/spouses", json={"person": {"full_name": "Phạm Văn Rể", "gender": "M"}}, headers=H)
+    assert r.status_code == 200, r.text
+    re_id = r.json()["person_id"]
+
+    # Thêm cha mẹ mới cho con rể
+    body = {"father": {"full_name": "Phạm Văn Thông", "gender": "M"}, "mother": {"full_name": "Đỗ Thị Gia", "gender": "F"}}
+    r = await admin.post(f"/api/admin/persons/{re_id}/parents", json=body, headers=H)
+    assert r.status_code == 200, r.text
+    parents_union = r.json()["union_id"]
+    r = await admin.post(f"/api/admin/persons/{re_id}/parents", json=body, headers=H)
+    assert r.status_code == 400  # đã có cha mẹ
+
+    # Nhà thông gia mở rộng tiếp: em của con rể
+    r = await admin.post(f"/api/admin/persons/{re_id}/siblings", json={"person": {"full_name": "Phạm Thị Út", "gender": "F"}}, headers=H)
+    assert r.status_code == 200, r.text
+    ut = r.json()["person_id"]
+
+    # Một dâu khác là con của cặp vợ chồng có sẵn
+    r = await admin.post(f"/api/admin/persons/{chau}/spouses", json={"person": {"full_name": "Phạm Thị Dâu Hai", "gender": "F"}}, headers=H)
+    dau2 = r.json()["person_id"]
+    r = await admin.post(f"/api/admin/persons/{dau2}/parents", json={"union_id": parents_union}, headers=H)
+    assert r.status_code == 200, r.text
+    assert r.json()["union_id"] == parents_union
+
+    # Chọn cha có sẵn: không được chọn hậu duệ / sai giới tính
+    t = await tree(admin)
+    thong = by_name(t, "Phạm Văn Thông")["id"]
+    assert (await admin.post(f"/api/admin/persons/{thong}/parents", json={"father_id": re_id}, headers=H)).status_code == 400
+    assert (await admin.post(f"/api/admin/persons/{thong}/parents", json={"mother_id": re_id}, headers=H)).status_code == 400
+    # Thủy tổ không nhận cha mẹ có sẵn
+    assert (await admin.post(f"/api/admin/persons/{t['root']}/parents", json={"father_id": thong}, headers=H)).status_code == 400
+
+    stats = (await admin.get("/api/admin/stats")).json()
+    assert stats["extended"] >= 3 and stats["disconnected"] == 0
+
+    # Nhà thông gia còn nối qua dâu thứ hai nên xóa con rể không kéo theo ai
+    preview = (await admin.get(f"/api/admin/persons/{re_id}/delete-preview")).json()
+    assert preview["mode"] == "inlaw" and preview["detached_count"] == 0
+    # Gỡ em gái con rể: là nhà thông gia, không có con → chỉ một người
+    preview = (await admin.get(f"/api/admin/persons/{ut}/delete-preview")).json()
+    assert preview["mode"] == "inlaw" and preview["count"] == 1
+
+
 async def test_audit_and_export(admin):
     r = await admin.get("/api/admin/audit")
     assert r.status_code == 200

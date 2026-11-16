@@ -70,9 +70,10 @@ make seed        # (tùy chọn) nạp dữ liệu mẫu để dùng thử
 | --- | --- | --- |
 | Hiển thị cây | FR-01..11: hàng theo đời, vợ/chồng đứng cạnh nhau, con nối từ đúng cuộc hôn nhân, trưởng đứng bên trái, phân biệt huyết thống / dâu rể / dòng ngoại, phóng to và chụm ngón, thu gọn nhánh kèm số người ẩn, lọc theo chi và nội tộc, minimap, chế độ danh sách, URL riêng cho từng người | `frontend/src/lib/layout.ts`, `src/tree/*`, `src/pages/TreePage.tsx`, `ListPage.tsx` |
 | Sửa trên cây | FR-20..28: menu trên nút, thêm nhanh và "Lưu và thêm tiếp", tự điền họ, sửa nhanh tên bằng nhấp đúp, kéo thả thứ tự, liên kết người có sẵn, cảnh báo năm sinh bất thường, chặn vòng lặp, Hoàn tác trong 10 giây, khóa lạc quan | `backend/app/services/persons.py`, `frontend/src/components/*` |
-| Xóa | FR-30..34: một bước / cả nhánh (phải gõ lại tên) / dâu rể chuyển thành "không rõ tên", Thùng rác 30 ngày, không cho xóa thủy tổ | `services/graph.py#plan_delete`, `services/trash.py` |
+| Xóa | FR-30..34: một bước / cả nhánh (phải gõ lại tên) / dâu rể chuyển thành "không rõ tên", Thùng rác 30 ngày, không cho xóa thủy tổ; người không còn đường nối về dòng họ (VD: nhà thông gia) được liệt kê và xóa theo | `services/graph.py#plan_delete`, `services/trash.py` |
 | Tìm kiếm, hồ sơ | FR-40..47: tìm không dấu, hồ sơ có ẩn trường riêng tư, Phả ký có định dạng, ngày giỗ 60 ngày tới, xuất PDF/PNG/SVG/Excel, nhật ký trường cũ → mới | `routers/public.py`, `services/tree.py`, `services/export.py`, `tree/exportTree.ts` |
-| Tôi là ai | FR-50..58: lưu localStorage, huy hiệu trên mọi nút, thẻ "gọi / xưng / mô tả", chiều "người này gọi tôi", so sánh 2 người, làm nổi đường nối, nhãn dự phòng "Bác hoặc Chú", bảng quy tắc sửa được, < 200 ms | `frontend/src/lib/kinship.ts`, `kinshipRules.ts` |
+| Tôi là ai | FR-50..58: lưu localStorage, huy hiệu trên mọi nút, thẻ "gọi / xưng / mô tả", chiều "người này gọi tôi", tra cứu quan hệ 2 người bất kỳ (chuỗi đường nối + xưng hô, gồm ông/bà thông gia), làm nổi đường nối, nhãn dự phòng "Bác hoặc Chú", bảng quy tắc sửa được, < 200 ms | `frontend/src/lib/kinship.ts`, `kinshipRules.ts` |
+| Mạng lưới quan hệ | Thêm cha mẹ cho dâu/rể và mọi người chưa có cha mẹ (người mới, người có sẵn hoặc cặp vợ chồng có sẵn), mở rộng nhà thông gia không giới hạn; trang "Mạng lưới" lấy một người làm tâm (1–4 bước), bấm để chuyển tâm; cây dòng họ giữ nguyên | `services/persons.py#add_parents`, `frontend/src/lib/network.ts`, `TreePage.tsx` (chế độ `network`) |
 | Phi chức năng | noindex, link ngẫu nhiên đổi được, TOTP bắt buộc, khóa tạm sau 5 lần sai, phiên 7 ngày, giới hạn tần suất API, ẩn mặc định trường nhạy cảm của người còn sống, sao lưu 30 bản, âm lịch UTC+7, đếm lượt xem ẩn danh | `caddy/Caddyfile`, `routers/auth.py`, `ratelimit.py`, `backup/backup.sh` |
 
 ### Các giả định đã áp dụng (PRD mục 11)
@@ -94,8 +95,8 @@ make seed        # (tùy chọn) nạp dữ liệu mẫu để dùng thử
 
 ## Kiểm thử
 
-- `frontend`: 43 test (Vitest). Gồm đủ 6 ví dụ nghiệm thu ở PRD mục 8, các bảng 8.2 và 8.3, nhãn dự phòng, dâu chưa có trên cây, quy tắc tùy biến, hiệu năng xưng hô 5.000 người dưới 200 ms, layout không chồng lấn và bố trí 5.000 người dưới 500 ms.
-- `backend`: 22 test (pytest). Gồm lịch âm (Tết, tháng nhuận, quy đổi hai chiều trong 80 năm, ngày 30), kế hoạch xóa, và kiểm thử tích hợp API trên PostgreSQL thật: đăng nhập + TOTP, khóa tạm, CSRF, ETag, ẩn trường riêng tư, cảnh báo, Hoàn tác, xóa nhánh, khôi phục, dâu rể, lùi gốc, xuất Excel.
+- `frontend`: 53 test (Vitest). Gồm đủ 6 ví dụ nghiệm thu ở PRD mục 8, các bảng 8.2 và 8.3, nhãn dự phòng, dâu chưa có trên cây, quy tắc tùy biến, hiệu năng xưng hô 5.000 người dưới 200 ms, layout không chồng lấn và bố trí 5.000 người dưới 500 ms.
+- `backend`: 28 test (pytest). Gồm lịch âm (Tết, tháng nhuận, quy đổi hai chiều trong 80 năm, ngày 30), kế hoạch xóa, và kiểm thử tích hợp API trên PostgreSQL thật: đăng nhập + TOTP, khóa tạm, CSRF, ETag, ẩn trường riêng tư, cảnh báo, Hoàn tác, xóa nhánh, khôi phục, dâu rể, lùi gốc, xuất Excel.
 
 ```bash
 make test

@@ -262,10 +262,11 @@ export function computeLayout(g: FamilyGraph, opts: LayoutOptions): Layout {
     cursor = Math.max(...root.contourR) - minL + 160;
   }
 
-  // Người chưa nối được vào cây (dữ liệu lỗi hoặc đang nhập dở) — đặt riêng bên phải
+  // Người chưa nối được vào cây (dữ liệu lỗi hoặc đang nhập dở) — đặt riêng bên phải.
+  // Nhà thông gia (nối được qua dâu/rể) không vẽ ở đây mà xem ở chế độ "Mạng lưới".
   if (!allowed) {
     for (const p of [...g.persons.values()].sort((a, b) => a.id - b.id)) {
-      if (placed.has(p.id) || p.gen != null) continue;
+      if (placed.has(p.id) || p.kind !== "orphan") continue;
       const unit = build(p.id);
       const minL = Math.min(...unit.contourL);
       emit(unit, cursor - minL, true);

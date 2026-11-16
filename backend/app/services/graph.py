@@ -67,9 +67,11 @@ class Graph:
                 self.unions_of[p].append(u.id)
         for pid in self.unions_of:
             self.unions_of[pid].sort(key=lambda uid: (self.unions[uid].order_index, uid))
+        self._links_of_union: dict[int, list[int]] = defaultdict(list)
         for link in self.links.values():
             self.children_of_union[link.union].append(link.child)
             self.links_of_child[link.child].append(link)
+            self._links_of_union[link.union].append(link.id)
 
     # ---- quan hệ cơ bản -------------------------------------------------
     def primary_union(self, child: int) -> int | None:
@@ -140,6 +142,68 @@ class Graph:
                         gens[child] = g + 1
                         queue.append(child)
         return gens
+
+    def connected(
+        self,
+        skip_persons: set[int] | frozenset[int] = frozenset(),
+        skip_unions: set[int] | frozenset[int] = frozenset(),
+        skip_links: set[int] | frozenset[int] = frozenset(),
+        null_slots: set[tuple[int, int]] | frozenset[tuple[int, int]] = frozenset(),
+    ) -> set[int]:
+        """Những người nối được về thủy tổ qua bất kỳ quan hệ nào (cha mẹ – con, hôn nhân):
+        dòng họ, dâu/rể và cả mạng lưới nhà thông gia. Các tham số `skip_*` mô phỏng
+        trạng thái sau khi xóa; `null_slots` gồm (union, người) bị gỡ khỏi một cuộc hôn nhân."""
+        root = self.root_id
+        if root is None or root not in self.persons or root in skip_persons:
+            return set()
+
+        def partners(uid: int) -> list[int]:
+            return [
+                p for p in self.unions[uid].partners()
+                if p not in skip_persons and (uid, p) not in null_slots
+            ]
+
+        def live_links(uid: int) -> list[int]:
+            return [
+                self.links[lid].child for lid in self._links_of_union.get(uid, [])
+                if lid not in skip_links and self.links[lid].child not in skip_persons
+            ]
+
+        seen = {root}
+        queue = deque([root])
+        while queue:
+            pid = queue.popleft()
+            near: list[int] = []
+            for uid in self.unions_of.get(pid, []):
+                if uid in skip_unions or (uid, pid) in null_slots:
+                    continue
+                near.extend(partners(uid))
+                near.extend(live_links(uid))
+            for link in self.links_of_child.get(pid, []):
+                if link.id in skip_links or link.union in skip_unions:
+                    continue
+                near.extend(partners(link.union))
+            for other in near:
+                if other not in seen:
+                    seen.add(other)
+                    queue.append(other)
+        return seen
+
+    def categories(self) -> dict[int, str]:
+        """lineage: huyết thống · inlaw: dâu/rể · extended: nhà thông gia · orphan: chưa nối vào cây."""
+        lineage = self.lineage()
+        connected = self.connected()
+        out: dict[int, str] = {}
+        for pid in self.persons:
+            if pid in lineage:
+                out[pid] = "lineage"
+            elif any(s in lineage for s in self.spouses(pid)):
+                out[pid] = "inlaw"
+            elif pid in connected:
+                out[pid] = "extended"
+            else:
+                out[pid] = "orphan"
+        return out
 
     def descendants(self, pid: int) -> set[int]:
         seen: set[int] = set()
@@ -217,6 +281,8 @@ class DeletePlan:
     link_ids: set[int] = field(default_factory=set)
     reason: str | None = None
     clears_root: bool = False
+    #: Người không còn đường nối nào về dòng họ sau khi xóa (VD: nhà thông gia của một dâu/rể) — xóa theo
+    detached: set[int] = field(default_factory=set)
 
     @property
     def count(self) -> int:
@@ -233,30 +299,44 @@ def plan_delete(g: Graph, pid: int) -> DeletePlan:
     plan = DeletePlan("single")
 
     if pid != g.root_id and pid not in lineage:
-        # Dâu/rể: con chung được giữ, vị trí vợ/chồng chuyển thành "không rõ tên" (FR-32)
+        # Dâu/rể, nhà thông gia: con chung được giữ, vị trí vợ/chồng chuyển thành "không rõ tên" (FR-32)
         plan.mode = "inlaw"
         plan.person_ids = {pid}
         for uid in g.unions_of.get(pid, []):
-            if g.children_of_union.get(uid):
+            if g.children_of_union.get(uid) and g.unions[uid].other(pid) is not None:
                 plan.union_slots_null.append((uid, g.unions[uid].slot_of(pid)))
             else:
                 plan.union_ids.add(uid)
-        plan.link_ids = {lk.id for lk in g.links_of_child.get(pid, [])}
-        plan.link_ids |= {lk.id for lk in g.links.values() if lk.union in plan.union_ids}
-        return plan
+    else:
+        desc = g.descendants(pid)
+        people = {pid} | desc
+        plan.mode = "branch" if desc else "single"
+        plan.person_ids = people
+        plan.union_ids = {uid for p in people for uid in g.unions_of.get(p, [])}
+        plan.clears_root = pid == g.root_id
 
-    desc = g.descendants(pid)
-    people = {pid} | desc
-    plan.mode = "branch" if desc else "single"
-    unions = {uid for p in people for uid in g.unions_of.get(p, [])}
-    for uid in list(unions):
-        for partner in g.unions[uid].partners():
-            if partner in people or partner in lineage:
-                continue
-            if set(g.unions_of.get(partner, [])) <= unions:
-                people.add(partner)
-    plan.person_ids = people
-    plan.union_ids = unions
-    plan.link_ids = {lk.id for lk in g.links.values() if lk.child in people or lk.union in unions}
-    plan.clears_root = pid == g.root_id
+    _add_detached(g, plan, pid)
     return plan
+
+
+def _add_detached(g: Graph, plan: DeletePlan, pid: int) -> None:
+    """Gom thêm những người sẽ bị tách khỏi mạng lưới (vợ/chồng của người bị xóa,
+    gia đình bên dâu/rể…) để không để lại nhánh mồ côi."""
+    def links_for() -> set[int]:
+        return {lk.id for lk in g.links.values() if lk.child in plan.person_ids or lk.union in plan.union_ids}
+
+    plan.link_ids = links_for()
+    before = g.connected()
+    if not before or g.root_id in plan.person_ids:
+        return
+    nulled = {(uid, pid) for uid, _slot in plan.union_slots_null}
+    after = g.connected(plan.person_ids, plan.union_ids, plan.link_ids, nulled)
+    detached = before - after - plan.person_ids
+    if not detached:
+        return
+    plan.detached = detached
+    plan.person_ids |= detached
+    plan.union_ids |= {uid for p in detached for uid in g.unions_of.get(p, [])}
+    # Cuộc hôn nhân mà người còn lại cũng bị tách rời thì xóa hẳn thay vì để "không rõ tên"
+    plan.union_slots_null = [(uid, slot) for uid, slot in plan.union_slots_null if uid not in plan.union_ids]
+    plan.link_ids = links_for()

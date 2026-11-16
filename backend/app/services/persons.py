@@ -285,42 +285,102 @@ async def add_spouse(db: AsyncSession, admin: Admin, pid: int, body: AddSpouseIn
     return _result(batch, person_id=sid, union_id=union.id)
 
 
-# ---- thêm cha/mẹ cho thủy tổ (lùi gốc) -----------------------------------
+# ---- thêm cha/mẹ (thủy tổ: lùi gốc; dâu/rể và nhà thông gia: mở rộng mạng lưới) ----
+def _check_existing_parent(g: Graph, pid: int, xid: int, gender: str) -> None:
+    role = "cha" if gender == "M" else "mẹ"
+    if xid not in g.persons:
+        raise bad_request(f"Không tìm thấy người được chọn làm {role}")
+    if xid == pid:
+        raise bad_request("Không thể chọn chính người này làm cha/mẹ")
+    if g.persons[xid].gender != gender:
+        raise bad_request(f"Người được chọn làm {role} phải là {'nam' if gender == 'M' else 'nữ'}")
+    if xid in g.spouses(pid):
+        raise bad_request("Không thể chọn vợ/chồng của người này làm cha/mẹ")
+    if xid in g.descendants(pid):
+        raise bad_request("Thao tác này sẽ tạo vòng lặp (một người là tổ tiên của chính mình).")
+
+
+def _find_union(g: Graph, husband: int | None, wife: int | None) -> int | None:
+    """Cuộc hôn nhân có sẵn đúng cặp (hoặc ô "không rõ tên" của một người)."""
+    owner = husband if husband is not None else wife
+    for uid in g.unions_of.get(owner, []):  # type: ignore[arg-type]
+        u = g.unions[uid]
+        if u.husband == husband and u.wife == wife:
+            return uid
+    return None
+
+
 async def add_parents(db: AsyncSession, admin: Admin, pid: int, body: AddParentsIn) -> dict[str, Any]:
     g = await load_graph(db)
     if pid not in g.persons:
         raise not_found()
-    if pid != g.root_id:
-        raise bad_request("Chỉ thêm cha/mẹ cho thủy tổ (để lùi gốc lên một đời).")
     if g.links_of_child.get(pid):
-        raise bad_request("Người này đã có cha mẹ")
+        raise bad_request("Người này đã có cha mẹ trên cây")
     me = g.persons[pid]
+    is_root = pid == g.root_id
+    if is_root and any(x is not None for x in (body.union_id, body.father_id, body.mother_id)):
+        raise bad_request("Thủy tổ chỉ thêm được cha/mẹ mới (để lùi gốc lên một đời).")
+
+    union_id = body.union_id
+    if union_id is not None:
+        if union_id not in g.unions:
+            raise not_found("Không tìm thấy cuộc hôn nhân")
+        u = g.unions[union_id]
+        for xid in u.partners():
+            _check_existing_parent(g, pid, xid, g.persons[xid].gender)
+        existing_parents = u.partners()
+    else:
+        if body.father_id is not None:
+            _check_existing_parent(g, pid, body.father_id, "M")
+        if body.mother_id is not None:
+            _check_existing_parent(g, pid, body.mother_id, "F")
+        existing_parents = [x for x in (body.father_id, body.mother_id) if x is not None]
+
+    warnings = birth_warnings(g, me.name, me.birth_year, existing_parents)
     if me.birth_year:
         for parent in (body.father, body.mother):
-            if parent and parent.birth_year and me.birth_year - parent.birth_year < MIN_PARENT_AGE:
-                raise AppError(409, "warnings", "Dữ liệu bất thường", warnings=[
-                    f"{parent.full_name} sinh năm {parent.birth_year}, chỉ hơn {me.name} {me.birth_year - parent.birth_year} tuổi."
-                ])
+            if parent and parent.birth_year:
+                gap = me.birth_year - parent.birth_year
+                if gap < 0:
+                    warnings.append(f"{me.name} (sinh {me.birth_year}) sinh trước cha/mẹ {parent.full_name} (sinh {parent.birth_year}).")
+                elif gap < MIN_PARENT_AGE:
+                    warnings.append(f"{parent.full_name} sinh năm {parent.birth_year}, chỉ hơn {me.name} {gap} tuổi.")
+    _raise_warnings(warnings, body.confirm_warnings)
 
-    rec = Recorder(db, admin.id, "edit", f"Thêm cha/mẹ cho thủy tổ {me.name}")
-    father = await _new_person(rec, body.father) if body.father else None
-    mother = await _new_person(rec, body.mother) if body.mother else None
-    union = Marriage(
-        husband_id=father.id if father else None,
-        wife_id=mother.id if mother else None,
-        kind="chinh_that",
-        order_index=1,
-    )
-    await rec.created(union)
-    await rec.created(ParentLink(child_id=pid, union_id=union.id, kind="biological"))
-    cfg = await _config(db)
-    before = snapshot(cfg)
-    cfg.root_person_id = (father or mother).id  # type: ignore[union-attr]
-    cfg.version += 1
-    await rec.updated(cfg, before)
+    rec = Recorder(db, admin.id, "edit", f"Thêm cha/mẹ cho {'thủy tổ ' if is_root else ''}{me.name}")
+    if union_id is None:
+        fid = body.father_id
+        mid = body.mother_id
+        if body.father:
+            fid = (await _new_person(rec, body.father)).id
+        if body.mother:
+            mid = (await _new_person(rec, body.mother)).id
+        union_id = _find_union(g, fid, mid)
+        if union_id is None:
+            owner = fid if fid is not None else mid
+            existing = len(g.unions_of.get(owner, [])) if owner in g.persons else 0
+            union = Marriage(
+                husband_id=fid,
+                wife_id=mid,
+                kind=("chinh_that" if existing == 0 else "ke_that") if fid is not None else "chong",
+                order_index=existing + 1,
+            )
+            await rec.created(union)
+            union_id = union.id
+    await rec.created(ParentLink(child_id=pid, union_id=union_id, kind=body.link_kind))
+
+    parents_union = await db.get(Marriage, union_id)
+    assert parents_union is not None
+    first_parent = parents_union.husband_id or parents_union.wife_id
+    if is_root:
+        cfg = await _config(db)
+        before = snapshot(cfg)
+        cfg.root_person_id = first_parent
+        cfg.version += 1
+        await rec.updated(cfg, before)
     batch = await rec.finish()
     await db.commit()
-    return _result(batch, person_id=cfg.root_person_id)
+    return _result(batch, person_id=first_parent, union_id=union_id)
 
 
 # ---- sửa ----------------------------------------------------------------
@@ -466,6 +526,8 @@ async def delete_preview(db: AsyncSession, pid: int) -> dict[str, Any]:
         "names": names[:30],
         "keeps_children": bool(plan.union_slots_null),
         "person_name": g.persons[pid].name if pid in g.persons else None,
+        "detached_count": len(plan.detached),
+        "detached_names": sorted((g.persons[i].name for i in plan.detached), key=normalize_name)[:30],
     }
 
 

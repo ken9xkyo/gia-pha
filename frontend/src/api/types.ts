@@ -172,6 +172,9 @@ export interface DeletePreview {
   names: string[];
   keeps_children: boolean;
   person_name: string | null;
+  /** Người sẽ không còn đường nối về dòng họ nên bị xóa theo (VD: nhà thông gia) */
+  detached_count: number;
+  detached_names: string[];
 }
 
 export interface TrashItem {
@@ -202,6 +205,7 @@ export interface Stats {
   persons: number;
   lineage: number;
   inlaws: number;
+  extended: number;
   generations: number;
   disconnected: number;
   with_siblings: number;

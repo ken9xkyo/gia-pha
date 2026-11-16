@@ -14,6 +14,8 @@ interface UIState {
   collapsed: number[];
   compare: { a: number | null; b: number | null } | null;
   highlight: number[] | null;
+  /** Mạng lưới: số bước quan hệ tính từ người ở tâm */
+  netRadius: number;
 
   setMe: (me: Ego | null) => void;
   dismissBanner: () => void;
@@ -49,6 +51,7 @@ export const useUI = create<UIState>()(
       collapsed: [],
       compare: null,
       highlight: null,
+      netRadius: 2,
       setMe: (me) => set({ me, bannerDismissed: true, highlight: null }),
       dismissBanner: () => set({ bannerDismissed: true }),
       set: (patch) => set(patch),
@@ -60,7 +63,7 @@ export const useUI = create<UIState>()(
     {
       name: "giapha-ui",
       storage: safeStorage,
-      partialize: (s) => ({ me: s.me, bannerDismissed: s.bannerDismissed, showBadges: s.showBadges, collapsed: s.collapsed }),
+      partialize: (s) => ({ me: s.me, bannerDismissed: s.bannerDismissed, showBadges: s.showBadges, collapsed: s.collapsed, netRadius: s.netRadius }),
     },
   ),
 );

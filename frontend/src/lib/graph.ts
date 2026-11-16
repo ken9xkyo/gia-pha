@@ -29,6 +29,28 @@ export interface PNode {
   ngoai: boolean;
   branch: string | null;
   search: string;
+  /** Vị trí trong mạng lưới quan hệ */
+  kind: PersonKind;
+}
+
+/** lineage: huyết thống · inlaw: dâu/rể · extended: nhà thông gia (nối được qua dâu/rể) · orphan: chưa nối vào cây */
+export type PersonKind = "lineage" | "inlaw" | "extended" | "orphan";
+
+export const KIND_LABEL: Record<PersonKind, string> = {
+  lineage: "Huyết thống",
+  inlaw: "Dâu/rể",
+  extended: "Nhà thông gia",
+  orphan: "Chưa nối vào cây",
+};
+
+export type EdgeRel = "parent" | "child" | "spouse";
+
+/** Một quan hệ trực tiếp: `rel` là vai của người kia đối với người đang xét. */
+export interface Edge {
+  to: number;
+  rel: EdgeRel;
+  link?: LinkKind;
+  union?: number;
 }
 
 export interface UNode {
@@ -72,6 +94,7 @@ export class FamilyGraph {
   readonly kinshipOverrides: RuleOverrides;
   readonly branches: string[];
   private descCount = new Map<number, number>();
+  private linksOfChild = new Map<number, RawLink[]>();
 
   constructor(raw: RawTree) {
     this.rootId = raw.root;
@@ -106,6 +129,7 @@ export class FamilyGraph {
         ngoai: false,
         branch: null,
         search: normalize(`${r.n} ${r.th ?? ""}`),
+        kind: "orphan",
       });
     }
     for (const u of raw.unions) {
@@ -133,6 +157,9 @@ export class FamilyGraph {
       const union = this.unions.get(l.u);
       if (!child || !union) continue;
       union.allLinks.push(l);
+      const list = this.linksOfChild.get(l.c);
+      if (list) list.push(l);
+      else this.linksOfChild.set(l.c, [l]);
       if (!child.parentLink || LINK_PRIORITY[l.k] < LINK_PRIORITY[child.parentLink.k]) child.parentLink = l;
     }
     for (const p of this.persons.values()) {
@@ -147,6 +174,7 @@ export class FamilyGraph {
       u.children.sort((a, b) => compareSiblings(this.persons.get(a)!, this.persons.get(b)!));
     }
     this.computeLineage();
+    this.computeKinds();
     const set = new Set<string>();
     for (const p of this.persons.values()) if (p.branch) set.add(p.branch);
     this.branches = [...set].sort((a, b) => a.localeCompare(b, "vi"));
@@ -186,6 +214,56 @@ export class FamilyGraph {
         }
       }
     }
+  }
+
+  /** Phân loại theo mạng lưới: ai nối được về thủy tổ qua bất kỳ quan hệ nào. */
+  private computeKinds(): void {
+    const root = this.rootId != null ? this.persons.get(this.rootId) : undefined;
+    const connected = new Set<number>();
+    if (root) {
+      connected.add(root.id);
+      const queue = [root.id];
+      for (let i = 0; i < queue.length; i++) {
+        for (const e of this.edges(queue[i])) {
+          if (connected.has(e.to)) continue;
+          connected.add(e.to);
+          queue.push(e.to);
+        }
+      }
+    }
+    for (const p of this.persons.values()) {
+      if (p.lineage) p.kind = "lineage";
+      else if (this.spouses(p.id).some((s) => this.persons.get(s)?.lineage)) p.kind = "inlaw";
+      else p.kind = connected.has(p.id) ? "extended" : "orphan";
+    }
+  }
+
+  /** Mọi quan hệ trực tiếp của một người: cha mẹ (kể cả nuôi/kế), vợ/chồng, con. */
+  edges(pid: number): Edge[] {
+    const p = this.persons.get(pid);
+    if (!p) return [];
+    const out: Edge[] = [];
+    for (const l of this.linksOfChild.get(pid) ?? []) {
+      const u = this.unions.get(l.u);
+      if (!u) continue;
+      for (const x of [u.husband, u.wife]) if (x != null && this.persons.has(x)) out.push({ to: x, rel: "parent", link: l.k, union: u.id });
+    }
+    for (const uid of p.unions) {
+      const u = this.unions.get(uid)!;
+      const other = u.husband === pid ? u.wife : u.husband;
+      if (other != null && this.persons.has(other)) out.push({ to: other, rel: "spouse", union: uid });
+      for (const l of u.allLinks) if (this.persons.has(l.c)) out.push({ to: l.c, rel: "child", link: l.k, union: uid });
+    }
+    return out;
+  }
+
+  /** Mọi cha/mẹ (kể cả quan hệ phụ như cha mẹ nuôi). */
+  allParents(pid: number): number[] {
+    return [...new Set(this.edges(pid).filter((e) => e.rel === "parent").map((e) => e.to))];
+  }
+
+  hasParents(pid: number): boolean {
+    return (this.linksOfChild.get(pid)?.length ?? 0) > 0;
   }
 
   get(id: number): PNode | undefined {
@@ -280,6 +358,7 @@ export class FamilyGraph {
       const s = this.spouses(pid)[0];
       if (s != null) parts.push(`${p.gender === "F" ? "vợ" : "chồng"} ${this.persons.get(s)?.name}`);
     }
+    if (p.kind === "extended") parts.push("nhà thông gia");
     return parts.join(" · ");
   }
 }

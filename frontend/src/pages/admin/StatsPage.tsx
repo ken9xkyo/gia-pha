@@ -23,7 +23,7 @@ export default function StatsPage() {
   return (
     <PageShell title="Thống kê">
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-        <Tile label="Tổng số thành viên" value={data.persons.toLocaleString("vi-VN")} sub={`${data.lineage} huyết thống · ${data.inlaws} dâu/rể`} />
+        <Tile label="Tổng số thành viên" value={data.persons.toLocaleString("vi-VN")} sub={`${data.lineage} huyết thống · ${data.inlaws} dâu/rể · ${data.extended} nhà thông gia`} />
         <Tile label="Số đời" value={String(data.generations)} />
         <Tile
           label="Độ đủ dữ liệu: có thứ tự anh chị em"

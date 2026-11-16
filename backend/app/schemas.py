@@ -113,12 +113,26 @@ class AddSiblingIn(BaseModel):
 
 
 class AddParentsIn(BaseModel):
+    """Cha/mẹ mới, người có sẵn (`*_id`) hoặc một cặp vợ chồng có sẵn (`union_id`)."""
+
     father: PersonCreate | None = None
     mother: PersonCreate | None = None
+    father_id: int | None = None
+    mother_id: int | None = None
+    union_id: int | None = None
+    link_kind: LinkKind = "biological"
+    confirm_warnings: bool = False
 
     @model_validator(mode="after")
     def _any(self) -> AddParentsIn:
-        if self.father is None and self.mother is None:
+        if self.father is not None and self.father_id is not None:
+            raise ValueError("Chỉ nhập cha mới hoặc chọn cha có sẵn, không cả hai")
+        if self.mother is not None and self.mother_id is not None:
+            raise ValueError("Chỉ nhập mẹ mới hoặc chọn mẹ có sẵn, không cả hai")
+        individual = any(x is not None for x in (self.father, self.mother, self.father_id, self.mother_id))
+        if self.union_id is not None and individual:
+            raise ValueError("Đã chọn cặp cha mẹ có sẵn thì không nhập thêm cha/mẹ")
+        if self.union_id is None and not individual:
             raise ValueError("Cần nhập ít nhất cha hoặc mẹ")
         if self.father and self.father.gender != "M":
             raise ValueError("Cha phải là nam")
