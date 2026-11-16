@@ -1,0 +1,131 @@
+name: giapha
+
+x-backend-env: &backend-env
+  DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-giapha}:${POSTGRES_PASSWORD:?Cần đặt POSTGRES_PASSWORD trong .env}@db:5432/${POSTGRES_DB:-giapha}
+  REDIS_URL: redis://redis:6379/0
+  SECRET_KEY: ${SECRET_KEY:?Cần đặt SECRET_KEY trong .env}
+  COOKIE_SECURE: ${COOKIE_SECURE:-true}
+  CLAN_NAME: ${CLAN_NAME:-Dòng họ}
+  INITIAL_ADMIN_EMAIL: ${INITIAL_ADMIN_EMAIL:-}
+  INITIAL_ADMIN_PASSWORD: ${INITIAL_ADMIN_PASSWORD:-}
+  INITIAL_ADMIN_NAME: ${INITIAL_ADMIN_NAME:-Quản trị viên}
+  PUBLIC_RATE_LIMIT_PER_MIN: ${PUBLIC_RATE_LIMIT_PER_MIN:-240}
+  MEDIA_DIR: /data/media
+  BACKUP_DIR: /backups
+  TZ: Asia/Ho_Chi_Minh
+
+x-backend: &backend
+  image: giapha/backend:1.0
+  build:
+    context: ./backend
+    target: runtime
+  environment: *backend-env
+  restart: unless-stopped
+  logging:
+    driver: json-file
+    options: { max-size: "10m", max-file: "3" }
+
+services:
+  db:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-giapha}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Cần đặt POSTGRES_PASSWORD trong .env}
+      POSTGRES_DB: ${POSTGRES_DB:-giapha}
+      TZ: Asia/Ho_Chi_Minh
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    shm_size: 128mb
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--save", "", "--appendonly", "no", "--maxmemory", "64mb", "--maxmemory-policy", "allkeys-lru"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+
+  # Chạy migration + khởi tạo cấu hình / admin đầu tiên rồi thoát.
+  # Chạy bằng root chỉ để trao quyền thư mục ảnh cho user app (uid 1000) của backend.
+  migrate:
+    <<: *backend
+    user: "0:0"
+    command: ["sh", "-c", "chown -R 1000:1000 /data/media && alembic upgrade head && python -m app.cli bootstrap"]
+    volumes:
+      - media:/data/media
+    restart: "no"
+    depends_on:
+      db: { condition: service_healthy }
+
+  backend:
+    <<: *backend
+    volumes:
+      - media:/data/media
+      - backups:/backups:ro
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+      redis: { condition: service_healthy }
+
+  # Tác vụ nền: dọn Thùng rác quá 30 ngày, phiên hết hạn
+  worker:
+    <<: *backend
+    command: ["python", "-m", "app.jobs"]
+    healthcheck: { disable: true }
+    volumes:
+      - media:/data/media
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+
+  web:
+    image: giapha/web:1.0
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile
+    environment:
+      DOMAIN: ${DOMAIN:-localhost}
+      ACME_EMAIL: ${ACME_EMAIL:-admin@example.com}
+    ports:
+      - "${HTTP_PORT:-80}:80"
+      - "${HTTPS_PORT:-443}:443"
+      - "${HTTPS_PORT:-443}:443/udp"
+    volumes:
+      - media:/srv/media:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      backend: { condition: service_healthy }
+    restart: unless-stopped
+
+  # Sao lưu hằng ngày lúc BACKUP_HOUR giờ, giữ BACKUP_KEEP bản
+  backup:
+    image: postgres:17-alpine
+    entrypoint: ["/bin/sh", "/backup.sh"]
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-giapha}
+      POSTGRES_DB: ${POSTGRES_DB:-giapha}
+      PGPASSWORD: ${POSTGRES_PASSWORD}
+      BACKUP_HOUR: ${BACKUP_HOUR:-2}
+      BACKUP_KEEP: ${BACKUP_KEEP:-30}
+      TZ: Asia/Ho_Chi_Minh
+    volumes:
+      - ./backup/backup.sh:/backup.sh:ro
+      - backups:/backups
+      - media:/media
+    depends_on:
+      db: { condition: service_healthy }
+    restart: unless-stopped
+
+volumes:
+  pgdata:
+  media:
+  backups:
+  caddy_data:
+  caddy_config:
